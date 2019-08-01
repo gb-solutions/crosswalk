@@ -26,3 +26,14 @@ git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git # Clo
 export PATH="/home/{username}/devtools/depot_tools:$PATH" # Add depot tools to the PATH
 cd ~ # Open home directory
 ```
+## 2) Checkout the source and apply GB Solutions' camera flash enhancement
+
+```bash
+mkdir crosswalk-checkout # Create directory for checkout
+cd crosswalk-checkout/ # Open checkout directory
+export XWALK_OS_ANDROID=1 # Set environment variable for android build
+gclient config --name src/xwalk https://github.com/gb-solutions/crosswalk.git # Configure gclient
+echo "target_os = [ 'android' ]" >> .gclient # Set target os in configuration file
+gclient sync # Start downloading dependencies
+```
+
