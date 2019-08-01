@@ -22,3 +22,7 @@ We are also on IRC: `#crosswalk` @ `chat.freenode.net`
 ## License
 
 Crosswalk's code uses the 3-clause BSD license, see our `LICENSE` file.
+
+## Build instructions
+
+How to build crosswalk with GB Solutions' camera flash enhancement: [here](build_instructions.md)
