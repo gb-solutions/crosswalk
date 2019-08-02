@@ -1,0 +1,190 @@
+--- VideoCaptureCamera2.java	2019-08-02 07:56:09.000000000 +0200
++++ VideoCaptureCamera2_mod.java	2019-08-02 07:58:14.000000000 +0200
+@@ -6,6 +6,7 @@
+ 
+ import android.annotation.TargetApi;
+ import android.content.Context;
++import android.content.SharedPreferences;
+ import android.graphics.ImageFormat;
+ import android.hardware.camera2.CameraAccessException;
+ import android.hardware.camera2.CameraCaptureSession;
+@@ -50,6 +51,15 @@
+                 changeCameraStateAndNotify(CameraState.STOPPED);
+                 nativeOnError(mNativeVideoCaptureDeviceAndroid, "Error configuring camera");
+             }
++
++            if (mTorchProxy == null) {
++                mTorchProxy = new CameraTorchProxy();
++            }        
++
++            Log.d(TAG, "CrStateListener onOpened called");
++                mTorchProxy.setCaptureSession(mPreviewSession);
++                mTorchProxy.setCameraDevice(cameraDevice);
++                mTorchProxy.setImageReader(imageReader);                        
+         }
+ 
+         @Override
+@@ -85,6 +95,14 @@
+                 // notified of capture events, instead, CrImageReaderListener will trigger every
+                 // time a downloaded image is ready. Since |handler| is null, we'll work on the
+                 // current Thread Looper.
++                if (mTorchProxy == null) {
++                    mTorchProxy = new CameraTorchProxy();
++                }
++                Log.d(TAG, "CrPreviewSessionListener onConfigured called");
++                mTorchProxy.setCaptureSession(mPreviewSession);
++                mTorchProxy.setCameraDevice(mCameraDevice);            
++                mTorchProxy.setImageReader(imageReader);
++
+                 mPreviewSession.setRepeatingRequest(mPreviewRequest, null, null);
+             } catch (CameraAccessException | IllegalArgumentException | SecurityException ex) {
+                 Log.e(TAG, "setRepeatingRequest: ", ex);
+@@ -229,9 +247,16 @@
+     private CameraDevice mCameraDevice;
+     private CameraCaptureSession mPreviewSession;
+     private CaptureRequest mPreviewRequest;
+-
++    ImageReader imageReader;
+     private CameraState mCameraState = CameraState.STOPPED;
+ 
++    // supercharge mods
++    protected CameraTorchProxy mTorchProxy;
++    private final SharedPreferences mPrefs;
++    private SharedPreferences.OnSharedPreferenceChangeListener mSharedPreferenceListener;
++    public static String TORCH_PREF_FILE = "torch-preferences";
++    public static String FLASH_TURNED_ON = "flash-turned-on";
++
+     // Service function to grab CameraCharacteristics and handle exceptions.
+     private static CameraCharacteristics getCameraCharacteristics(Context appContext, int id) {
+         final CameraManager manager =
+@@ -256,7 +281,7 @@
+ 
+         // Create an ImageReader and plug a thread looper into it to have
+         // readback take place on its own thread.
+-        final ImageReader imageReader = ImageReader.newInstance(mCaptureFormat.getWidth(),
++        imageReader = ImageReader.newInstance(mCaptureFormat.getWidth(),
+                 mCaptureFormat.getHeight(), mCaptureFormat.getPixelFormat(), 2 /* maxImages */);
+         HandlerThread thread = new HandlerThread("CameraPreview");
+         thread.start();
+@@ -450,6 +475,7 @@
+ 
+     VideoCaptureCamera2(Context context, int id, long nativeVideoCaptureDeviceAndroid) {
+         super(context, id, nativeVideoCaptureDeviceAndroid);
++        mPrefs = context.getSharedPreferences(TORCH_PREF_FILE, Context.MODE_PRIVATE);
+     }
+ 
+     @Override
+@@ -511,6 +537,27 @@
+         final CrStateListener stateListener = new CrStateListener();
+         try {
+             manager.openCamera(Integer.toString(mId), stateListener, mainHandler);
++
++            mTorchProxy = new CameraTorchProxy();
++            mTorchProxy.setCameraManager(manager);
++            mTorchProxy.setCameraId(mId);
++            mTorchProxy.setCaptureSession(mPreviewSession);
++            mTorchProxy.setCameraDevice(mCameraDevice);
++            mTorchProxy.setImageReader(imageReader);
++
++            mSharedPreferenceListener = new SharedPreferences.OnSharedPreferenceChangeListener() {
++              public void onSharedPreferenceChanged(SharedPreferences prefs, String key) {
++                  if (key.equals(FLASH_TURNED_ON)) {
++                      if (prefs.getBoolean(key, false)) {
++                          mTorchProxy.setFlashOn();
++                      } else {
++                          mTorchProxy.setFlashOff();
++                      }
++                  }
++              }
++            };
++            mPrefs.registerOnSharedPreferenceChangeListener(mSharedPreferenceListener);
++
+         } catch (CameraAccessException | IllegalArgumentException | SecurityException ex) {
+             Log.e(TAG, "allocate: manager.openCamera: ", ex);
+             return false;
+@@ -523,6 +570,11 @@
+     public boolean stopCapture() {
+         Log.d(TAG, "stopCapture");
+ 
++        if (mTorchProxy != null) {                    
++          mPrefs.unregisterOnSharedPreferenceChangeListener(mSharedPreferenceListener);                              
++          mTorchProxy = null;
++        }
++
+         // With Camera2 API, the capture is started asynchronously, which will cause problem if
+         // stopCapture comes too quickly. Without stopping the previous capture properly, the next
+         // startCapture will fail and make Chrome no-responding. So wait camera to be STARTED.
+@@ -615,4 +667,72 @@
+     public void deallocate() {
+         Log.d(TAG, "deallocate");
+     }
++ 
++    private class CameraTorchProxy {
++        protected android.hardware.camera2.CameraCaptureSession cameraCaptureSession = null;
++        protected android.hardware.camera2.CameraManager mCameraManager = null;
++        protected android.hardware.camera2.CameraDevice cameraDevice = null;
++        protected android.media.ImageReader imageReader = null;
++        protected int mId;
++
++        public void setCameraDevice(android.hardware.camera2.CameraDevice cameraDevice) {
++            this.cameraDevice = cameraDevice;
++        }
++
++        public void setCaptureSession(android.hardware.camera2.CameraCaptureSession cameraCaptureSession) {
++            this.cameraCaptureSession = cameraCaptureSession;
++        }
++
++        public void setCameraManager(android.hardware.camera2.CameraManager cameraManager) {
++            mCameraManager = cameraManager;            
++        }
++
++        public void setImageReader(android.media.ImageReader imageReader) {
++            this.imageReader = imageReader;
++        }
++
++        public void setCameraId(int id) {
++            mId = id;
++        }
++
++        public void setFlashOff() {
++            Log.d(TAG, "Flash turning off");
++            if (cameraCaptureSession != null && cameraDevice != null && imageReader != null) {
++              try {
++                CaptureRequest.Builder builder = cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
++                builder.set(CaptureRequest.FLASH_MODE, CameraMetadata.FLASH_MODE_OFF);
++                builder.addTarget(imageReader.getSurface());
++                CaptureRequest request = builder.build();
++                cameraCaptureSession.setRepeatingRequest(request, null, null);               
++              } catch (CameraAccessException ex) {
++                Log.e(TAG, "setTorchMode: " + ex.getMessage(), ex);
++              }
++            } else {
++            Log.d(TAG, "Flash turning off failed.");
++            Log.d(TAG, "CameraDevice: "+ cameraDevice);
++            Log.d(TAG, "CaptureSession: " + cameraCaptureSession);
++            Log.d(TAG, "ImageReader: "+ imageReader);
++            }
++        }
++
++        public void setFlashOn() {
++            Log.d(TAG, "Flash turning on");
++          if (cameraCaptureSession != null && cameraDevice != null && imageReader != null) {
++            try {
++                CaptureRequest.Builder builder = cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
++                builder.set(CaptureRequest.FLASH_MODE, CameraMetadata.FLASH_MODE_TORCH);                
++                builder.addTarget(imageReader.getSurface());
++                CaptureRequest request = builder.build();
++                cameraCaptureSession.setRepeatingRequest(request, null, null);             
++            } catch (CameraAccessException ex) {
++              Log.e(TAG, "setTorchMode: " + ex.getMessage(), ex);
++            }
++          } else {
++            Log.d(TAG, "Flash turning on failed something is null.");
++            Log.d(TAG, "CameraDevice: "+ cameraDevice);
++            Log.d(TAG, "CaptureSession: " + cameraCaptureSession);
++            Log.d(TAG, "ImageReader: "+ imageReader);
++          }
++        }
++    }
+ }
+\ No newline at end of file
